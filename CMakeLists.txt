@@ -262,6 +262,7 @@ set(LIB_SRCS
   vtkNIFTIHeader.cxx
   vtkNIFTIReader.cxx
   vtkNIFTIWriter.cxx
+  vtkScancoCTReader.cxx
 )
 
 # Headers without a matching .cxx file are listed here
