@@ -251,6 +251,7 @@ set(LIB_SRCS
   vtkDICOMReader.cxx
   vtkDICOMSequence.cxx
   vtkDICOMItem.cxx
+  vtkDICOMIndexer.cxx
   vtkDICOMSorter.cxx
   ${REFCOUNT_SRC}
   vtkDICOMUtilities.cxx
