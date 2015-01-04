@@ -19,10 +19,12 @@
 #include "vtkDICOMParser.h"
 #include "vtkDICOMMetaData.h"
 #include "vtkDICOMMetaDataAdapter.h"
+#include "vtkDICOMIndexer.h"
 
 // from dicomcli
 #include "readquery.h"
 
+#include <vtkIntArray.h>
 #include <vtkStringArray.h>
 #include <vtkSmartPointer.h>
 
@@ -55,13 +57,15 @@ void dicomfind_usage(FILE *file, const char *cp)
   fprintf(file, "usage:\n"
     "  %s [options] <directory>\n\n", cp);
   fprintf(file, "options:\n"
-    "  -k tag=value    Provide a key to be queried and matched.\n"
-    "  -exec ... +     Execute the given command for every series matched.\n"      
-    "  -exec ... \\;   Execute the given command for every file matched.\n"      
-    "  -q <query.txt>  Provide a file to describe the find query.\n"
-    "  -o <data.csv>   Provide a file for the query results.\n"
-    "  --help          Print a brief help message.\n"
-    "  --version       Print the software version.\n");
+    "  -k tag=value        Provide a key to be queried and matched.\n"
+    "  -exec command {} +  Execute the given command for every series matched.\n"
+    "  -exec command {} \\; Execute the given command for every file matched.\n"
+    "  -sort-st            Sort the series filenames in space and time.\n"
+    "  -sort-ts            Sort the series filenames in time, then space.\n"
+    "  -q <query.txt>      Provide a file to describe the find query.\n"
+    "  -o <data.csv>       Provide a file for the query results.\n"
+    "  --help              Print a brief help message.\n"
+    "  --version           Print the software version.\n");
 }
 
 // print the help
@@ -483,6 +487,64 @@ bool execute_command(const char *command, char *argv[])
 }
 #endif
 
+enum {
+  SORT_NONE,
+  SORT_SPACE_TIME,
+  SORT_TIME_SPACE
+};
+
+// Index the files in a series
+void series_sort(vtkStringArray *inArray, vtkStringArray *outArray, int sortMode)
+{
+  vtkSmartPointer<vtkDICOMMetaData> meta =
+    vtkSmartPointer<vtkDICOMMetaData>::New();
+  vtkSmartPointer<vtkDICOMParser> parser =
+    vtkSmartPointer<vtkDICOMParser>::New();
+
+  meta->SetNumberOfInstances(inArray->GetNumberOfTuples());
+  parser->SetMetaData(meta);
+
+  for (int i = 0; i < inArray->GetNumberOfTuples(); i++)
+    {
+    parser->SetFileName(inArray->GetValue(i).c_str());
+    parser->SetIndex(i);
+    parser->Update();
+    }
+
+  vtkSmartPointer<vtkDICOMIndexer> indexer =
+    vtkSmartPointer<vtkDICOMIndexer>::New();
+
+  indexer->SetMetaData(meta);
+  indexer->TimeAsVectorOn();
+  indexer->ReverseSlicesOff();
+  indexer->Update();
+
+  vtkIntArray *fileIndexArray = indexer->GetFileIndexArray();
+  vtkIntArray *frameIndexArray = indexer->GetFrameIndexArray();
+
+  int nSlices = fileIndexArray->GetNumberOfTuples();
+  int nComponents = fileIndexArray->GetNumberOfComponents();
+
+  outArray->Reset();
+
+  for (int j = 0; j < nSlices*nComponents; j++)
+    {
+    int sliceIndex = j/nComponents;
+    int componentIndex = j - sliceIndex*nComponents;
+    if (sortMode == SORT_TIME_SPACE)
+      {
+      componentIndex = j/nSlices;
+      sliceIndex = j - componentIndex*nSlices;
+      }
+    int k = sliceIndex*nComponents + componentIndex;
+
+    if (frameIndexArray->GetValue(k) == 0)
+      {
+      outArray->InsertNextValue(inArray->GetValue(fileIndexArray->GetValue(k)));
+      }
+    }
+}
+
 // This program will dump all the metadata in the given file
 int main(int argc, char *argv[])
 {
@@ -490,6 +552,7 @@ int main(int argc, char *argv[])
   QueryTagList qtlist;
   vtkDICOMItem query;
   std::vector<std::string> oplist;
+  int sortMode = 0;
 
   vtkSmartPointer<vtkStringArray> a = vtkSmartPointer<vtkStringArray>::New();
   const char *ofile = 0;
@@ -546,6 +609,17 @@ int main(int argc, char *argv[])
         {
         return 1;
         }
+      }
+    else if (strcmp(arg, "-sort-st") == 0)
+      {
+      if (sortMode == 0)
+        {
+        sortMode = SORT_SPACE_TIME;
+        }
+      }
+    else if (strcmp(arg, "-sort-ts") == 0)
+      {
+      sortMode = SORT_TIME_SPACE;
       }
     else if (strcmp(arg, "-exec") == 0)
       {
@@ -621,6 +695,10 @@ int main(int argc, char *argv[])
     osp->flush();
     }
 
+  // For sorting the files
+  vtkSmartPointer<vtkStringArray> sortedFiles =
+    vtkSmartPointer<vtkStringArray>::New();
+
   // Write data for every input directory
   for (vtkIdType i = 0; i < a->GetNumberOfTuples(); i++)
     {
@@ -650,6 +728,11 @@ int main(int argc, char *argv[])
         for (int k = k0; k <= k1; k++)
           {
           vtkStringArray *sa = finder->GetFileNamesForSeries(k);
+          if (sortMode != 0)
+            {
+            series_sort(sa, sortedFiles, sortMode);
+            sa = sortedFiles;
+            }
 
           if (oplist.back() == ";")
             {
@@ -725,7 +808,13 @@ int main(int argc, char *argv[])
         for (int k = k0; k <= k1; k++)
           {
           vtkStringArray *sa = finder->GetFileNamesForSeries(k);
-          for (int kk = 0; kk < sa->GetNumberOfValues(); kk++)
+          if (sortMode != 0)
+            {
+            series_sort(sa, sortedFiles, sortMode);
+            sa = sortedFiles;
+            }
+
+          for (int kk = 0; kk < sa->GetNumberOfTuples(); kk++)
             {
             *osp << sa->GetValue(kk) << "\n";
             }
